@@ -7,9 +7,13 @@ from sqlalchemy.orm import Mapped, mapped_column
 from app.core.database import Base
 
 
-class UserRole(str, enum.Enum):
+class Role(str, enum.Enum):
     CUSTOMER = "CUSTOMER"
     AGENT = "AGENT"
+    ADMIN = "ADMIN"
+
+
+UserRole = Role
 
 
 class User(Base):
@@ -20,8 +24,11 @@ class User(Base):
         String(255), unique=True, index=True, nullable=False
     )
     hashed_password: Mapped[str] = mapped_column(String(255), nullable=False)
-    role: Mapped[UserRole] = mapped_column(
-        Enum(UserRole), default=UserRole.CUSTOMER, nullable=False
+    role: Mapped[Role] = mapped_column(
+        Enum(Role, name="user_role_enum"),
+        default=Role.CUSTOMER,
+        server_default=Role.CUSTOMER.value,
+        nullable=False,
     )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),

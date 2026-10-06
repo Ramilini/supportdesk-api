@@ -3,17 +3,17 @@ from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from app.api.deps import get_current_user, get_db
+from app.api.deps import get_current_user, get_db, require_roles
 from app.core.security import authenticate_user, create_access_token, get_password_hash
-from app.models.user import User
-from app.schemas.user import Token, UserCreate, UserLogin, UserResponse
+from app.models.user import Role, User
+from app.schemas.user import Token, UserCreate, UserLogin, UserRead, UserRoleUpdate
 
 router = APIRouter(prefix="", tags=["auth"])
 
 
 @router.post(
     "/auth/register",
-    response_model=UserResponse,
+    response_model=UserRead,
     status_code=status.HTTP_201_CREATED,
 )
 def register_user(
@@ -62,8 +62,36 @@ def login_user(
     return Token(access_token=token)
 
 
-@router.get("/users/me", response_model=UserResponse)
+@router.get("/users/me", response_model=UserRead)
 def get_current_user_profile(
     current_user: User = Depends(get_current_user),
 ) -> User:
     return current_user
+
+
+@router.get("/users/", response_model=list[UserRead])
+def list_users(
+    db: Session = Depends(get_db),
+    _: User = Depends(require_roles(Role.AGENT, Role.ADMIN)),
+) -> list[User]:
+    return list(db.scalars(select(User).order_by(User.id)).all())
+
+
+@router.patch("/users/{user_id}/role", response_model=UserRead)
+def update_user_role(
+    user_id: int,
+    payload: UserRoleUpdate,
+    db: Session = Depends(get_db),
+    _: User = Depends(require_roles(Role.ADMIN)),
+) -> User:
+    user = db.get(User, user_id)
+    if user is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="User not found",
+        )
+
+    user.role = payload.role
+    db.commit()
+    db.refresh(user)
+    return user
