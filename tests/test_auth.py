@@ -13,7 +13,7 @@ from app.api.deps import get_db
 from app.core.database import Base
 from app.core.security import create_access_token
 from app.main import app
-from app.models.user import User
+from app.models.user import Role, User
 
 
 def test_user_model_constraints_and_timezone_fields() -> None:
@@ -26,6 +26,7 @@ def test_user_model_constraints_and_timezone_fields() -> None:
     assert email_index.unique is True
     assert User.__table__.c.created_at.type.timezone is True
     assert User.__table__.c.updated_at.type.timezone is True
+    assert {role.value for role in Role} == {"CUSTOMER", "AGENT", "ADMIN"}
 
 
 @pytest.fixture
@@ -108,7 +109,7 @@ def test_registration_does_not_allow_role_escalation(client: TestClient) -> None
     assert response.status_code == 422
 
 
-def test_login_with_valid_credentials_and_get_current_user(
+def test_login_with_valid_credentials_and_get_customer_profile(
     client: TestClient,
 ) -> None:
     assert register_user(client).status_code == 201
@@ -198,3 +199,67 @@ def test_get_current_user_rejects_inactive_user(client: TestClient) -> None:
     )
 
     assert response.status_code == 401
+
+
+@pytest.mark.parametrize(
+    ("role", "expected_status"),
+    [
+        (Role.CUSTOMER, 200),
+        (Role.AGENT, 200),
+        (Role.ADMIN, 200),
+    ],
+)
+def test_user_profile_requires_agent_or_admin(
+    client: TestClient,
+    role: Role,
+    expected_status: int,
+) -> None:
+    email = f"{role.value.lower()}@example.com"
+    db_generator = app.dependency_overrides[get_db]()
+    db = next(db_generator)
+    try:
+        db.add(User(email=email, hashed_password="unused", role=role))
+        db.commit()
+    finally:
+        db_generator.close()
+
+    token = create_access_token(email)
+    response = client.get(
+        "/users/me",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+
+    assert response.status_code == expected_status
+
+
+@pytest.mark.parametrize(
+    ("role", "expected_status"),
+    [
+        (Role.CUSTOMER, 403),
+        (Role.AGENT, 200),
+        (Role.ADMIN, 200),
+    ],
+)
+def test_list_users_requires_agent_or_admin(
+    client: TestClient,
+    role: Role,
+    expected_status: int,
+) -> None:
+    email = f"{role.value.lower()}@example.com"
+    db_generator = app.dependency_overrides[get_db]()
+    db = next(db_generator)
+    try:
+        db.add(User(email=email, hashed_password="unused", role=role))
+        db.commit()
+    finally:
+        db_generator.close()
+
+    token = create_access_token(email)
+    response = client.get(
+        "/users/",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+
+    assert response.status_code == expected_status
+    if expected_status == 200:
+        assert [user["email"] for user in response.json()] == [email]

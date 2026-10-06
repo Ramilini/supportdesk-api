@@ -2,7 +2,7 @@ from datetime import datetime
 
 from pydantic import BaseModel, ConfigDict, EmailStr, Field, field_validator
 
-from app.models.user import UserRole
+from app.models.user import Role
 
 
 class PasswordCredentials(BaseModel):
@@ -26,15 +26,24 @@ class UserLogin(PasswordCredentials):
     email: EmailStr
 
 
-class UserResponse(BaseModel):
+class UserRead(BaseModel):
     id: int
     email: EmailStr
-    role: UserRole
+    role: Role
     created_at: datetime
     updated_at: datetime
     is_active: bool
 
     model_config = ConfigDict(from_attributes=True)
+
+
+UserResponse = UserRead
+
+
+class UserRoleUpdate(BaseModel):
+    role: Role
+
+    model_config = ConfigDict(extra="forbid")
 
 
 class Token(BaseModel):
