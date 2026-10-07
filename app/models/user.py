@@ -1,10 +1,14 @@
 import enum
 from datetime import datetime, timezone
+from typing import TYPE_CHECKING
 
 from sqlalchemy import Boolean, DateTime, Enum, String, func, true
-from sqlalchemy.orm import Mapped, mapped_column
+from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.core.database import Base
+
+if TYPE_CHECKING:
+    from app.models.ticket import Ticket
 
 
 class Role(str, enum.Enum):
@@ -49,3 +53,4 @@ class User(Base):
         server_default=true(),
         nullable=False,
     )
+    tickets: Mapped[list["Ticket"]] = relationship(back_populates="owner")
