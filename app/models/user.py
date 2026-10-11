@@ -8,6 +8,7 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 from app.core.database import Base
 
 if TYPE_CHECKING:
+    from app.models.comment import Comment
     from app.models.ticket import Ticket
 
 
@@ -53,4 +54,15 @@ class User(Base):
         server_default=true(),
         nullable=False,
     )
-    tickets: Mapped[list["Ticket"]] = relationship(back_populates="owner")
+    tickets: Mapped[list["Ticket"]] = relationship(
+        back_populates="owner",
+        foreign_keys="Ticket.owner_id",
+    )
+    assigned_tickets: Mapped[list["Ticket"]] = relationship(
+        back_populates="assigned_to",
+        foreign_keys="Ticket.assigned_to_id",
+    )
+    comments: Mapped[list["Comment"]] = relationship(
+        back_populates="author",
+        passive_deletes=True,
+    )
