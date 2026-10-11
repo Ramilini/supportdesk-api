@@ -29,6 +29,12 @@ class TicketUpdate(BaseModel):
         return self
 
 
+class TicketAssignment(BaseModel):
+    assigned_to_id: int | None
+
+    model_config = ConfigDict(extra="forbid")
+
+
 class TicketResponse(BaseModel):
     id: int
     title: str
@@ -38,5 +44,6 @@ class TicketResponse(BaseModel):
     created_at: datetime
     updated_at: datetime
     owner_id: int
+    assigned_to_id: int | None
 
     model_config = ConfigDict(from_attributes=True)

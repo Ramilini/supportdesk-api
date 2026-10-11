@@ -1,7 +1,15 @@
 import enum
 from datetime import datetime, timezone
 
-from sqlalchemy import DateTime, Enum, ForeignKey, String, Text, func, text
+from sqlalchemy import (
+    DateTime,
+    Enum,
+    ForeignKey,
+    String,
+    Text,
+    func,
+    text,
+)
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.core.database import Base
@@ -45,6 +53,11 @@ class Ticket(Base):
         nullable=False,
         index=True,
     )
+    assigned_to_id: Mapped[int | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         default=lambda: datetime.now(timezone.utc),
@@ -59,4 +72,16 @@ class Ticket(Base):
         nullable=False,
     )
 
-    owner: Mapped[User] = relationship(back_populates="tickets")
+    owner: Mapped[User] = relationship(
+        back_populates="tickets",
+        foreign_keys=[owner_id],
+    )
+    assigned_to: Mapped[User | None] = relationship(
+        back_populates="assigned_tickets",
+        foreign_keys=[assigned_to_id],
+    )
+    comments: Mapped[list["Comment"]] = relationship(
+        back_populates="ticket",
+        cascade="all, delete-orphan",
+        passive_deletes=True,
+    )
