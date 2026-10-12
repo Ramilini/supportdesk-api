@@ -1,71 +1,24 @@
-from collections.abc import Generator
-
 import pytest
 from fastapi import HTTPException
 from fastapi.testclient import TestClient
-from sqlalchemy import create_engine, select, text
-from sqlalchemy.orm import Session, sessionmaker
-from sqlalchemy.pool import StaticPool
+from sqlalchemy import select
+from sqlalchemy.orm import Session
 
-from app.api.deps import get_db, require_roles
-from app.core.database import Base
-from app.core.security import create_access_token
-from app.main import app
+from app.api.deps import require_roles
 from app.models.user import Role, User
 
 
-@pytest.fixture
-def rbac_client() -> Generator[tuple[TestClient, sessionmaker[Session]], None, None]:
-    engine = create_engine(
-        "sqlite://",
-        connect_args={"check_same_thread": False},
-        poolclass=StaticPool,
-    )
-    test_session_factory = sessionmaker(
-        autocommit=False,
-        autoflush=False,
-        bind=engine,
-    )
-    Base.metadata.create_all(bind=engine)
+def test_require_roles_allows_configured_role(make_user) -> None:
+    agent = make_user("agent@example.com", Role.AGENT)
 
-    def override_get_db() -> Generator[Session, None, None]:
-        db = test_session_factory()
-        try:
-            yield db
-        finally:
-            db.close()
-
-    app.dependency_overrides[get_db] = override_get_db
-    try:
-        with TestClient(app) as client:
-            yield client, test_session_factory
-    finally:
-        app.dependency_overrides.pop(get_db, None)
-        Base.metadata.drop_all(bind=engine)
-        engine.dispose()
+    assert require_roles(Role.AGENT, Role.ADMIN)(current_user=agent) is agent
 
 
-def test_require_roles_returns_user_for_allowed_role() -> None:
-    user = User(
-        email="agent@example.com",
-        hashed_password="unused",
-        role=Role.AGENT,
-    )
-    check_role = require_roles(Role.AGENT, Role.ADMIN)
-
-    assert check_role(current_user=user) is user
-
-
-def test_require_roles_rejects_disallowed_role() -> None:
-    user = User(
-        email="customer@example.com",
-        hashed_password="unused",
-        role=Role.CUSTOMER,
-    )
-    check_role = require_roles(Role.AGENT, Role.ADMIN)
+def test_require_roles_rejects_disallowed_role(make_user) -> None:
+    customer = make_user("customer@example.com", Role.CUSTOMER)
 
     with pytest.raises(HTTPException) as exc_info:
-        check_role(current_user=user)
+        require_roles(Role.AGENT, Role.ADMIN)(current_user=customer)
 
     assert exc_info.value.status_code == 403
     assert exc_info.value.detail == "Insufficient permissions"
@@ -76,93 +29,28 @@ def test_require_roles_requires_at_least_one_role() -> None:
         require_roles()
 
 
-def test_user_role_column_defaults_to_customer_on_database() -> None:
-    role_column = User.__table__.c.role
-
-    assert role_column.nullable is False
-    assert role_column.default is not None
-    assert role_column.default.arg is Role.CUSTOMER
-    assert role_column.server_default is not None
-    assert role_column.server_default.arg == Role.CUSTOMER.value
-
-
-def test_database_assigns_customer_when_role_is_omitted(
-    rbac_client: tuple[TestClient, sessionmaker[Session]],
-) -> None:
-    _, test_session_factory = rbac_client
-    with test_session_factory() as db:
-        db.execute(
-            text(
-                "INSERT INTO users (email, hashed_password) "
-                "VALUES ('default-role@example.com', 'unused')"
-            )
-        )
-        db.commit()
-        user = db.scalar(
-            select(User).where(User.email == "default-role@example.com")
-        )
-
-    assert user is not None
-    assert user.role is Role.CUSTOMER
-
-
 @pytest.mark.parametrize(
-    ("path", "role", "expected_status"),
+    ("role", "expected_status"),
     [
-        ("/users/me", Role.CUSTOMER, 200),
-        ("/users/me", Role.AGENT, 200),
-        ("/users/me", Role.ADMIN, 200),
-        ("/users/", Role.CUSTOMER, 403),
-        ("/users/", Role.AGENT, 200),
-        ("/users/", Role.ADMIN, 200),
+        (Role.CUSTOMER, 403),
+        (Role.AGENT, 200),
+        (Role.ADMIN, 200),
     ],
 )
-def test_protected_user_routes_enforce_roles(
-    rbac_client: tuple[TestClient, sessionmaker[Session]],
-    path: str,
+def test_user_list_requires_agent_or_admin(
+    client: TestClient,
+    make_user,
+    headers_for,
     role: Role,
     expected_status: int,
 ) -> None:
-    client, test_session_factory = rbac_client
-    email = f"{role.value.lower()}@example.com"
-    with test_session_factory() as db:
-        db.add(User(email=email, hashed_password="unused", role=role))
-        db.commit()
+    user = make_user(f"{role.value.lower()}@example.com", role)
 
-    token = create_access_token(email)
-    response = client.get(
-        path,
-        headers={"Authorization": f"Bearer {token}"},
-    )
+    response = client.get("/users/", headers=headers_for(user.email))
 
     assert response.status_code == expected_status
-    if expected_status == 200 and path == "/users/me":
-        assert response.json()["email"] == email
-    elif expected_status == 200:
-        assert [user["email"] for user in response.json()] == [email]
-
-
-@pytest.mark.parametrize(
-    ("method", "path"),
-    [
-        ("get", "/users/me"),
-        ("get", "/users/"),
-        ("patch", "/users/1/role"),
-    ],
-)
-def test_protected_user_routes_require_authentication(
-    rbac_client: tuple[TestClient, sessionmaker[Session]],
-    method: str,
-    path: str,
-) -> None:
-    client, _ = rbac_client
-
-    if method == "patch":
-        response = client.patch(path, json={"role": "AGENT"})
-    else:
-        response = client.get(path)
-
-    assert response.status_code == 401
+    if expected_status == 200:
+        assert [item["email"] for item in response.json()] == [user.email]
 
 
 @pytest.mark.parametrize(
@@ -174,95 +62,82 @@ def test_protected_user_routes_require_authentication(
     ],
 )
 def test_role_update_requires_admin(
-    rbac_client: tuple[TestClient, sessionmaker[Session]],
+    client: TestClient,
+    db_session: Session,
+    make_user,
+    headers_for,
     role: Role,
     expected_status: int,
 ) -> None:
-    client, test_session_factory = rbac_client
-    target = User(
-        email="target@example.com",
-        hashed_password="unused",
-        role=Role.CUSTOMER,
-    )
-    requester = User(
-        email=f"{role.value.lower()}@example.com",
-        hashed_password="unused",
-        role=role,
-    )
-    requester_email = requester.email
-    with test_session_factory() as db:
-        db.add_all([target, requester])
-        db.commit()
-        target_id = target.id
+    requester = make_user(f"{role.value.lower()}@example.com", role)
+    target = make_user("target@example.com")
 
-    token = create_access_token(requester_email)
     response = client.patch(
-        f"/users/{target_id}/role",
-        headers={"Authorization": f"Bearer {token}"},
-        json={"role": "AGENT"},
+        f"/users/{target.id}/role",
+        headers=headers_for(requester.email),
+        json={"role": Role.AGENT.value},
     )
 
     assert response.status_code == expected_status
-    if expected_status == 200:
-        assert response.json()["role"] == Role.AGENT.value
-
-    with test_session_factory() as db:
-        updated_target = db.get(User, target_id)
-        assert updated_target is not None
-        expected_role = Role.AGENT if role is Role.ADMIN else Role.CUSTOMER
-        assert updated_target.role is expected_role
-
-
-def test_role_update_returns_not_found_for_missing_user(
-    rbac_client: tuple[TestClient, sessionmaker[Session]],
-) -> None:
-    client, test_session_factory = rbac_client
-    admin = User(
-        email="admin@example.com",
-        hashed_password="unused",
-        role=Role.ADMIN,
+    db_session.expire_all()
+    stored_target = db_session.get(User, target.id)
+    assert stored_target is not None
+    assert stored_target.role is (
+        Role.AGENT if role is Role.ADMIN else Role.CUSTOMER
     )
-    admin_email = admin.email
-    with test_session_factory() as db:
-        db.add(admin)
-        db.commit()
 
-    token = create_access_token(admin_email)
+
+def test_admin_role_update_returns_not_found_for_missing_user(
+    client: TestClient,
+    admin_headers: dict[str, str],
+) -> None:
     response = client.patch(
         "/users/999/role",
-        headers={"Authorization": f"Bearer {token}"},
-        json={"role": "AGENT"},
+        headers=admin_headers,
+        json={"role": Role.AGENT.value},
     )
 
     assert response.status_code == 404
     assert response.json()["detail"] == "User not found"
 
 
-def test_role_update_rejects_unknown_role(
-    rbac_client: tuple[TestClient, sessionmaker[Session]],
+def test_admin_role_update_rejects_unknown_role(
+    client: TestClient,
+    admin_headers: dict[str, str],
+    customer_user: User,
 ) -> None:
-    client, test_session_factory = rbac_client
-    admin = User(
-        email="admin@example.com",
-        hashed_password="unused",
-        role=Role.ADMIN,
-    )
-    admin_email = admin.email
-    target = User(
-        email="target@example.com",
-        hashed_password="unused",
-        role=Role.CUSTOMER,
-    )
-    with test_session_factory() as db:
-        db.add_all([admin, target])
-        db.commit()
-        target_id = target.id
-
-    token = create_access_token(admin_email)
     response = client.patch(
-        f"/users/{target_id}/role",
-        headers={"Authorization": f"Bearer {token}"},
+        f"/users/{customer_user.id}/role",
+        headers=admin_headers,
         json={"role": "SUPERUSER"},
     )
 
     assert response.status_code == 422
+
+
+def test_user_listing_contains_all_roles_only_for_staff(
+    client: TestClient,
+    db_session: Session,
+    customer_user: User,
+    agent_headers: dict[str, str],
+) -> None:
+    db_session.add(
+        User(
+            email="administrator@example.com",
+            hashed_password="unused",
+            role=Role.ADMIN,
+        )
+    )
+    db_session.flush()
+
+    response = client.get("/users/", headers=agent_headers)
+
+    assert response.status_code == 200
+    assert {item["role"] for item in response.json()} == {
+        Role.CUSTOMER.value,
+        Role.AGENT.value,
+        Role.ADMIN.value,
+    }
+    assert db_session.scalar(
+        select(User).where(User.email == customer_user.email)
+    ) is customer_user

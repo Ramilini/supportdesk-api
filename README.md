@@ -22,3 +22,13 @@ Apply the database schema with Alembic before running the API:
 ```shell
 alembic upgrade head
 ```
+
+Run the test suite and print a per-file coverage report with:
+
+```shell
+pytest
+```
+
+Tests use a separate in-memory SQLite database and roll back the outer
+transaction after each test; they do not connect to the configured development
+database.
