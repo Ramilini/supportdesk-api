@@ -1,8 +1,10 @@
 from collections.abc import Callable, Generator
+import os
+from sqlite3 import Connection as SQLiteConnection
 
 import pytest
 from fastapi.testclient import TestClient
-from sqlalchemy import Connection, create_engine
+from sqlalchemy import Connection, create_engine, event
 from sqlalchemy.orm import Session, sessionmaker
 from sqlalchemy.pool import StaticPool
 
@@ -16,11 +18,23 @@ from app.models.user import Role, User
 
 @pytest.fixture
 def db_engine():
-    engine = create_engine(
-        "sqlite+pysqlite://",
-        connect_args={"check_same_thread": False},
-        poolclass=StaticPool,
-    )
+    database_url = os.getenv("TEST_DATABASE_URL", "sqlite+pysqlite://")
+    engine_options = {"pool_pre_ping": True}
+    if database_url.startswith("sqlite"):
+        engine_options.update(
+            connect_args={"check_same_thread": False},
+            poolclass=StaticPool,
+        )
+    engine = create_engine(database_url, **engine_options)
+    if engine.dialect.name == "sqlite":
+        @event.listens_for(engine, "connect")
+        def enable_sqlite_foreign_keys(
+            dbapi_connection: SQLiteConnection, connection_record: object
+        ) -> None:
+            cursor = dbapi_connection.cursor()
+            cursor.execute("PRAGMA foreign_keys=ON")
+            cursor.close()
+
     Base.metadata.create_all(bind=engine)
     try:
         yield engine
