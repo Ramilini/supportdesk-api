@@ -1,3 +1,4 @@
+import os
 from unittest.mock import Mock
 
 from fastapi.testclient import TestClient
@@ -16,13 +17,18 @@ def test_health_check(client: TestClient) -> None:
     assert response.json() == {"status": "ok"}
 
 
-def test_test_database_is_in_memory_and_distinct_from_application_database(
+def test_test_database_is_isolated_from_application_database(
     db_session: Session,
 ) -> None:
     test_connection = db_session.get_bind()
+    test_database_url = os.getenv("TEST_DATABASE_URL")
 
-    assert test_connection.dialect.name == "sqlite"
-    assert test_connection.engine.url.database in (None, "")
+    if test_database_url:
+        assert test_connection.dialect.name == "postgresql"
+        assert test_connection.engine.url.database == "supportdesk_test"
+    else:
+        assert test_connection.dialect.name == "sqlite"
+        assert test_connection.engine.url.database in (None, "")
     assert test_connection.engine is not application_engine
 
 

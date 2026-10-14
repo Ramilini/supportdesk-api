@@ -2,12 +2,10 @@ from collections.abc import Generator
 
 import pytest
 from fastapi.testclient import TestClient
-from sqlalchemy import create_engine, event, select
+from sqlalchemy import select
 from sqlalchemy.orm import Session, sessionmaker
-from sqlalchemy.pool import StaticPool
 
 from app.api.deps import get_db
-from app.core.database import Base
 from app.core.security import create_access_token
 from app.main import app
 from app.models.comment import Comment
@@ -16,29 +14,18 @@ from app.models.user import Role, User
 
 
 @pytest.fixture
-def comments_client() -> Generator[
-    tuple[TestClient, sessionmaker[Session]], None, None
-]:
-    engine = create_engine(
-        "sqlite://",
-        connect_args={"check_same_thread": False},
-        poolclass=StaticPool,
-    )
-
-    @event.listens_for(engine, "connect")
-    def enable_foreign_keys(
-        dbapi_connection: object, connection_record: object
-    ) -> None:
-        cursor = dbapi_connection.cursor()
-        cursor.execute("PRAGMA foreign_keys=ON")
-        cursor.close()
-
+def comments_client(
+    db_engine,
+) -> Generator[tuple[TestClient, sessionmaker[Session]], None, None]:
+    connection = db_engine.connect()
+    transaction = connection.begin()
     test_session_factory = sessionmaker(
         autocommit=False,
         autoflush=False,
-        bind=engine,
+        bind=connection,
+        expire_on_commit=False,
+        join_transaction_mode="create_savepoint",
     )
-    Base.metadata.create_all(bind=engine)
 
     def override_get_db() -> Generator[Session, None, None]:
         db = test_session_factory()
@@ -53,8 +40,9 @@ def comments_client() -> Generator[
             yield client, test_session_factory
     finally:
         app.dependency_overrides.pop(get_db, None)
-        Base.metadata.drop_all(bind=engine)
-        engine.dispose()
+        if transaction.is_active:
+            transaction.rollback()
+        connection.close()
 
 
 def create_user(
