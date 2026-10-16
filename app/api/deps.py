@@ -1,7 +1,7 @@
 from collections.abc import Callable, Generator
 
 from fastapi import Depends, HTTPException, status
-from fastapi.security import OAuth2PasswordBearer
+from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -9,7 +9,14 @@ from app.core.database import SessionLocal
 from app.core.security import decode_access_token
 from app.models.user import Role, User
 
-oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/auth/login")
+bearer_scheme = HTTPBearer(
+    scheme_name="BearerAuth",
+    description=(
+        "JWT access token. Log in at `/auth/login`, then paste the "
+        "`access_token` value here."
+    ),
+    auto_error=False,
+)
 
 
 def get_db() -> Generator[Session, None, None]:
@@ -21,16 +28,19 @@ def get_db() -> Generator[Session, None, None]:
 
 
 def get_current_user(
-    token: str = Depends(oauth2_scheme), db: Session = Depends(get_db)
+    credentials: HTTPAuthorizationCredentials | None = Depends(bearer_scheme),
+    db: Session = Depends(get_db),
 ) -> User:
     credentials_exception = HTTPException(
         status_code=status.HTTP_401_UNAUTHORIZED,
         detail="Could not validate credentials",
         headers={"WWW-Authenticate": "Bearer"},
     )
+    if credentials is None:
+        raise credentials_exception
 
     try:
-        subject = decode_access_token(token)
+        subject = decode_access_token(credentials.credentials)
     except ValueError as exc:
         raise credentials_exception from exc
 

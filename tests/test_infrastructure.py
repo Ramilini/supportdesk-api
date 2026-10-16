@@ -17,6 +17,86 @@ def test_health_check(client: TestClient) -> None:
     assert response.json() == {"status": "ok"}
 
 
+def test_openapi_documents_bearer_authentication_and_operations(
+    client: TestClient,
+) -> None:
+    assert client.get("/docs").status_code == 200
+    response = client.get("/openapi.json")
+
+    assert response.status_code == 200
+    schema = response.json()
+    assert schema["info"]["title"] == "SupportDesk API"
+    assert schema["info"]["version"] == "1.0.0"
+
+    bearer_scheme = schema["components"]["securitySchemes"]["BearerAuth"]
+    assert bearer_scheme["type"] == "http"
+    assert bearer_scheme["scheme"] == "bearer"
+    assert bearer_scheme["bearerFormat"] == "JWT"
+
+    tags = {tag["name"] for tag in schema["tags"]}
+    assert {"Auth", "Users", "Tickets", "Comments"} <= tags
+
+    expected_operations = {
+        ("/auth/register", "post"): ("Auth", "201", ("400",), False),
+        ("/auth/login", "post"): ("Auth", "200", ("401",), False),
+        ("/users/me", "get"): ("Users", "200", ("401",), True),
+        ("/users/", "get"): ("Users", "200", ("401", "403"), True),
+        ("/users/{user_id}/role", "patch"): (
+            "Users",
+            "200",
+            ("401", "403", "404"),
+            True,
+        ),
+        ("/tickets", "post"): ("Tickets", "201", ("401",), True),
+        ("/tickets", "get"): ("Tickets", "200", ("401",), True),
+        ("/tickets/{ticket_id}", "get"): (
+            "Tickets",
+            "200",
+            ("401", "403", "404"),
+            True,
+        ),
+        ("/tickets/{ticket_id}", "patch"): (
+            "Tickets",
+            "200",
+            ("401", "403", "404"),
+            True,
+        ),
+        ("/tickets/{ticket_id}/assign", "patch"): (
+            "Tickets",
+            "200",
+            ("401", "403", "404", "422"),
+            True,
+        ),
+        ("/tickets/{ticket_id}/comments", "post"): (
+            "Comments",
+            "201",
+            ("401", "403", "404"),
+            True,
+        ),
+        ("/tickets/{ticket_id}/comments", "get"): (
+            "Comments",
+            "200",
+            ("401", "403", "404"),
+            True,
+        ),
+        ("/health", "get"): ("System", "200", (), False),
+    }
+    for (path, method), (tag, success_status, error_statuses, protected) in (
+        expected_operations.items()
+    ):
+        operation = schema["paths"][path][method]
+        assert operation["tags"] == [tag]
+        assert operation["summary"]
+        assert operation["description"]
+        assert "application/json" in operation["responses"][success_status]["content"]
+        for error_status in error_statuses:
+            assert error_status in operation["responses"]
+        if protected:
+            assert operation["security"] == [{"BearerAuth": []}]
+        else:
+            assert "security" not in operation
+
+
 def test_test_database_is_isolated_from_application_database(
     db_session: Session,
 ) -> None:

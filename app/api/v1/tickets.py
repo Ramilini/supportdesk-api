@@ -14,7 +14,15 @@ from app.schemas.ticket import (
     TicketUpdate,
 )
 
-router = APIRouter(prefix="/tickets", tags=["tickets"])
+router = APIRouter(prefix="/tickets")
+
+UNAUTHORIZED_RESPONSE = {
+    "description": "The request is unauthenticated or the token is invalid.",
+}
+FORBIDDEN_RESPONSE = {
+    "description": "The authenticated user does not have permission.",
+}
+TICKET_NOT_FOUND_RESPONSE = {"description": "The requested ticket does not exist."}
 
 
 def _get_accessible_ticket(
@@ -40,6 +48,10 @@ def _get_accessible_ticket(
     "",
     response_model=TicketResponse,
     status_code=status.HTTP_201_CREATED,
+    tags=["Tickets"],
+    summary="Create a support ticket",
+    description="Creates a ticket owned by the authenticated user.",
+    responses={status.HTTP_401_UNAUTHORIZED: UNAUTHORIZED_RESPONSE},
 )
 def create_ticket(
     payload: TicketCreate,
@@ -57,6 +69,14 @@ def create_ticket(
     "/{ticket_id}/comments",
     response_model=CommentResponse,
     status_code=status.HTTP_201_CREATED,
+    tags=["Comments"],
+    summary="Add a comment to a ticket",
+    description="Adds a comment authored by the authenticated user.",
+    responses={
+        status.HTTP_401_UNAUTHORIZED: UNAUTHORIZED_RESPONSE,
+        status.HTTP_403_FORBIDDEN: FORBIDDEN_RESPONSE,
+        status.HTTP_404_NOT_FOUND: TICKET_NOT_FOUND_RESPONSE,
+    },
 )
 def create_comment(
     ticket_id: int,
@@ -79,6 +99,14 @@ def create_comment(
 @router.get(
     "/{ticket_id}/comments",
     response_model=list[CommentResponse],
+    tags=["Comments"],
+    summary="List ticket comments",
+    description="Returns comments in creation order for an accessible ticket.",
+    responses={
+        status.HTTP_401_UNAUTHORIZED: UNAUTHORIZED_RESPONSE,
+        status.HTTP_403_FORBIDDEN: FORBIDDEN_RESPONSE,
+        status.HTTP_404_NOT_FOUND: TICKET_NOT_FOUND_RESPONSE,
+    },
 )
 def list_comments(
     ticket_id: int,
@@ -94,7 +122,26 @@ def list_comments(
     return list(db.scalars(query).all())
 
 
-@router.patch("/{ticket_id}/assign", response_model=TicketResponse)
+@router.patch(
+    "/{ticket_id}/assign",
+    response_model=TicketResponse,
+    tags=["Tickets"],
+    summary="Assign or unassign a ticket",
+    description=(
+        "Assigns a ticket to an active agent, or clears the assignment when "
+        "`assigned_to_id` is null. Available to agents and administrators."
+    ),
+    responses={
+        status.HTTP_401_UNAUTHORIZED: UNAUTHORIZED_RESPONSE,
+        status.HTTP_403_FORBIDDEN: FORBIDDEN_RESPONSE,
+        status.HTTP_404_NOT_FOUND: {
+            "description": "The ticket or requested agent does not exist.",
+        },
+        status.HTTP_422_UNPROCESSABLE_CONTENT: {
+            "description": "The assignee is not an active agent.",
+        },
+    },
+)
 def assign_ticket(
     ticket_id: int,
     payload: TicketAssignment,
@@ -129,7 +176,17 @@ def assign_ticket(
     return ticket
 
 
-@router.get("", response_model=list[TicketResponse])
+@router.get(
+    "",
+    response_model=list[TicketResponse],
+    tags=["Tickets"],
+    summary="List tickets",
+    description=(
+        "Returns tickets in ID order with optional status, priority, and "
+        "pagination filters. Customers see only their own tickets."
+    ),
+    responses={status.HTTP_401_UNAUTHORIZED: UNAUTHORIZED_RESPONSE},
+)
 def list_tickets(
     skip: int = Query(default=0, ge=0),
     limit: int = Query(default=100, ge=1, le=100),
@@ -150,7 +207,18 @@ def list_tickets(
     return list(db.scalars(query).all())
 
 
-@router.get("/{ticket_id}", response_model=TicketResponse)
+@router.get(
+    "/{ticket_id}",
+    response_model=TicketResponse,
+    tags=["Tickets"],
+    summary="Get a ticket",
+    description="Returns a ticket the authenticated user is allowed to access.",
+    responses={
+        status.HTTP_401_UNAUTHORIZED: UNAUTHORIZED_RESPONSE,
+        status.HTTP_403_FORBIDDEN: FORBIDDEN_RESPONSE,
+        status.HTTP_404_NOT_FOUND: TICKET_NOT_FOUND_RESPONSE,
+    },
+)
 def get_ticket(
     ticket_id: int,
     db: Session = Depends(get_db),
@@ -159,7 +227,21 @@ def get_ticket(
     return _get_accessible_ticket(ticket_id, db, current_user)
 
 
-@router.patch("/{ticket_id}", response_model=TicketResponse)
+@router.patch(
+    "/{ticket_id}",
+    response_model=TicketResponse,
+    tags=["Tickets"],
+    summary="Update a ticket",
+    description=(
+        "Updates ticket fields. Customers may update an open ticket and may "
+        "only close it; agents and administrators can update any accessible ticket."
+    ),
+    responses={
+        status.HTTP_401_UNAUTHORIZED: UNAUTHORIZED_RESPONSE,
+        status.HTTP_403_FORBIDDEN: FORBIDDEN_RESPONSE,
+        status.HTTP_404_NOT_FOUND: TICKET_NOT_FOUND_RESPONSE,
+    },
+)
 def update_ticket(
     ticket_id: int,
     payload: TicketUpdate,

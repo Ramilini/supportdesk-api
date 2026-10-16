@@ -8,13 +8,32 @@ from app.core.security import authenticate_user, create_access_token, get_passwo
 from app.models.user import Role, User
 from app.schemas.user import Token, UserCreate, UserLogin, UserRead, UserRoleUpdate
 
-router = APIRouter(prefix="", tags=["auth"])
+router = APIRouter(prefix="")
+
+UNAUTHORIZED_RESPONSE = {
+    "description": "The request is unauthenticated or the token is invalid.",
+}
+FORBIDDEN_RESPONSE = {
+    "description": "The authenticated user does not have permission.",
+}
+NOT_FOUND_RESPONSE = {"description": "The requested user does not exist."}
 
 
 @router.post(
     "/auth/register",
     response_model=UserRead,
     status_code=status.HTTP_201_CREATED,
+    tags=["Auth"],
+    summary="Register a customer account",
+    description=(
+        "Creates an active customer account. The password is stored as a "
+        "one-way hash and is never included in the response."
+    ),
+    responses={
+        status.HTTP_400_BAD_REQUEST: {
+            "description": "A user with this email address already exists.",
+        },
+    },
 )
 def register_user(
     payload: UserCreate, db: Session = Depends(get_db)
@@ -46,7 +65,21 @@ def register_user(
     return user
 
 
-@router.post("/auth/login", response_model=Token)
+@router.post(
+    "/auth/login",
+    response_model=Token,
+    tags=["Auth"],
+    summary="Log in and obtain a JWT",
+    description=(
+        "Validates email and password credentials and returns a Bearer access "
+        "token for protected endpoints."
+    ),
+    responses={
+        status.HTTP_401_UNAUTHORIZED: {
+            "description": "The email address or password is incorrect.",
+        },
+    },
+)
 def login_user(
     payload: UserLogin, db: Session = Depends(get_db)
 ) -> Token:
@@ -62,14 +95,31 @@ def login_user(
     return Token(access_token=token)
 
 
-@router.get("/users/me", response_model=UserRead)
+@router.get(
+    "/users/me",
+    response_model=UserRead,
+    tags=["Users"],
+    summary="Get the current user",
+    description="Returns the profile associated with the supplied JWT.",
+    responses={status.HTTP_401_UNAUTHORIZED: UNAUTHORIZED_RESPONSE},
+)
 def get_current_user_profile(
     current_user: User = Depends(get_current_user),
 ) -> User:
     return current_user
 
 
-@router.get("/users/", response_model=list[UserRead])
+@router.get(
+    "/users/",
+    response_model=list[UserRead],
+    tags=["Users"],
+    summary="List users",
+    description="Lists users in ID order. Available to agents and administrators.",
+    responses={
+        status.HTTP_401_UNAUTHORIZED: UNAUTHORIZED_RESPONSE,
+        status.HTTP_403_FORBIDDEN: FORBIDDEN_RESPONSE,
+    },
+)
 def list_users(
     db: Session = Depends(get_db),
     _: User = Depends(require_roles(Role.AGENT, Role.ADMIN)),
@@ -77,7 +127,18 @@ def list_users(
     return list(db.scalars(select(User).order_by(User.id)).all())
 
 
-@router.patch("/users/{user_id}/role", response_model=UserRead)
+@router.patch(
+    "/users/{user_id}/role",
+    response_model=UserRead,
+    tags=["Users"],
+    summary="Update a user's role",
+    description="Changes a user's role. Only administrators can perform this action.",
+    responses={
+        status.HTTP_401_UNAUTHORIZED: UNAUTHORIZED_RESPONSE,
+        status.HTTP_403_FORBIDDEN: FORBIDDEN_RESPONSE,
+        status.HTTP_404_NOT_FOUND: NOT_FOUND_RESPONSE,
+    },
+)
 def update_user_role(
     user_id: int,
     payload: UserRoleUpdate,
